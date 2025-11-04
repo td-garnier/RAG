@@ -1,0 +1,9 @@
+sentence-transformers
+langchain-chroma
+langchain-huggingface
+langchain[google-genai]
+langchain 
+langchain-text-splitters 
+langchain-community 
+bs4
+dotenv

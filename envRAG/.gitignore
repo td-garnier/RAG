@@ -1,2 +1,5 @@
 /chroma_db
 .env
+RAGite1.ipynb
+/.venv
+uv.lock
