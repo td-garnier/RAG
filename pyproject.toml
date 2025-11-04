@@ -13,4 +13,5 @@ dependencies = [
     "langchain-chroma>=1.0.0",
     "sentence-transformers>=5.1.2",
     "dotenv>=0.9.9",
+    "pypdf>=6.1.3",
 ]

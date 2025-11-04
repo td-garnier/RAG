@@ -6,45 +6,36 @@ Ce projet permet de **ingérer des documents PDF** et de **faire de l'inférence
 
 ## Prérequis
 
-- Python 3.12+
+- Python 3.13
 - [Google API Key](https://developers.google.com/identity) pour accéder à Gemini et créer un fichier .env avec la clé "GOOGLE_API_KEY="
 - Les fichiers PDF à analyser dans le dossier `./documents`
 
----
-
-## Installation de l'environnement
-
-Depuis le dossier du projet :
-
 ```bash
-# Installer le package pour créer des venv si besoin (Debian/Ubuntu)
-sudo apt install python3.12-venv
 
-# Créer un environnement virtuel
-python3 -m venv uv
-
-# Activer l'environnement
-source uv/bin/activate   # Linux / macOS
-uv\Scripts\activate      # Windows
-
-# Installer les dépendances
-pip install -r requirements.txt
 ```
 
 ## Structure du projet
 
 RAG_proj/
 ├─ documents/        # PDF à ingérer
+
+├─ .env/        # variable d'environnement
+
 ├─ chroma_db/        # Base vectorielle persistée
+
 ├─ RAG_ingest.py     # Script d'ingestion
+
 ├─ RAG_infer.py      # Script d'inférence
+
 ├─ main.py           # Interface principale pour choisir ingestion ou inférence
+
 ├─ requirements.txt  # Dépendances Python
+
 └─ README.md
 
 ## Lancer le projet
 
-Depuis l'environnement virtuel activé (`uv`) :
+Depuis le dossier RAG_proj :
 
 ```bash
 uv run main.py
