@@ -1,25 +1,33 @@
 import os
+from typing import Annotated, TypedDict
+
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages, AnyMessage
+
+
 # =====================================================
-# 1️⃣  Chargement des variables d'environnement
+# 1️⃣ Définition de l’état du graphe
+# =====================================================
+class State(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+
+
+# =====================================================
+# 2️⃣ Configuration de base
 # =====================================================
 load_dotenv()
 if not os.environ.get("GOOGLE_API_KEY"):
     raise ValueError("⚠️ GOOGLE_API_KEY manquante dans le fichier .env")
 
-# =====================================================
-# 2️⃣  Chargement du modèle d'embeddings et de la base Chroma
-# =====================================================
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
 vectordb = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
 
-# =====================================================
-# 3️⃣  Initialisation du modèle LLM Gemini
-# =====================================================
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash-lite",
     temperature=0.3,
@@ -28,10 +36,39 @@ llm = ChatGoogleGenerativeAI(
     max_retries=2
 )
 
+
 # =====================================================
-# 4️⃣  Boucle interactive
+# 3️⃣ Définition du nœud de génération
 # =====================================================
-print("🤖 Assistant RAG prêt ! (tape 'exit' ou 'quit' pour arrêter)\n")
+def call_model(state: State):
+    """Nœud : appelle Gemini avec l’historique et renvoie la réponse."""
+    messages = state["messages"]
+    response = llm.invoke(messages)
+    return {"messages": [response]}
+
+
+# =====================================================
+# 4️⃣ Création et compilation du graphe LangGraph
+# =====================================================
+checkpointer = InMemorySaver()
+builder = StateGraph(State)
+
+# Ajoute ton nœud principal
+builder.add_node("model", call_model)
+
+# 🧠 définir le flux
+builder.add_edge(START, "model")  # entrée → model
+builder.add_edge("model", END)    # model → fin
+
+# Compilation
+graph = builder.compile(checkpointer=checkpointer)
+
+
+# =====================================================
+# 5️⃣ Boucle interactive avec mémoire persistante
+# =====================================================
+thread_id = "main_thread"
+print("🤖 Assistant RAG + LangGraph prêt ! (tape 'exit' ou 'quit' pour arrêter)\n")
 
 while True:
     query = input("🧠 Votre question : ").strip()
@@ -39,42 +76,45 @@ while True:
         print("\n👋 Fin de la session. À bientôt !")
         break
 
-    # Recherche vectorielle
-    results = vectordb.similarity_search(query, k=10)
-
-    # Extraire les tags des résultats
-    tags = [r.metadata.get("tag", "inconnu") for r in results]
-    unique_tags = list(set(tags))
-
-    print(f"\n🔍 {len(results)} extraits trouvés — tags détectés : {', '.join(unique_tags)}\n")
-
-    # Concaténer les textes des documents trouvés
+    # Recherche vectorielle RAG
+    results = vectordb.similarity_search(query, k=5)
     if not results:
         print("❌ Aucun résultat pertinent trouvé dans la base.")
         continue
 
+    # Construire le contexte à partir des extraits trouvés
     rag_context = "\n\n".join(
-        [f"Extrait {i+1} ({r.metadata.get('source', 'inconnu')}):\n{r.page_content}" for i, r in enumerate(results)]
+        [f"📄 {r.metadata.get('source', 'inconnu')}:\n{r.page_content}" for r in results]
     )
 
-    # Préparer le prompt pour Gemini
+    # Construire le prompt pour le LLM
     messages = [
-        (
-            "system",
-            "Tu es un assistant spécialisé en documentation technique. "
-            "Réponds uniquement à partir des extraits fournis ci-dessous, sans inventer d'informations."
-        ),
-        (
-            "human",
-            f"Voici les extraits trouvés par le RAG :\n{rag_context}\n\nQuestion : {query}"
-        ),
+        {"role": "system", "content": "Tu es un assistant RAG. Réponds uniquement à partir des extraits fournis."},
+        {"role": "user", "content": f"Contexte :\n{rag_context}\n\nQuestion : {query}"}
     ]
 
-    # Génération de la réponse
+    # Appel du graphe avec historique LangGraph
+    print("💭 Génération de la réponse...")
     try:
-        ai_msg = llm.invoke(messages)
-        print("\n🤖 Réponse :\n")
-        print(ai_msg.content.strip(), "\n")
+        output = graph.invoke(
+            {"messages": messages},
+            config={"configurable": {"thread_id": thread_id}},
+        )
+
+        # Vérification de la structure de la sortie
+        messages_out = output.get("messages", [])
+        if not messages_out:
+            print("⚠️ Aucune réponse générée par le modèle.")
+            continue
+
+        last_msg = messages_out[-1]
+        response_text = getattr(last_msg, "content", None)
+
+        if not response_text:
+            print(f"⚠️ Contenu vide. Message brut : {last_msg}")
+        else:
+            print("\n🤖 Réponse :\n")
+            print(response_text.strip(), "\n")
 
     except Exception as e:
-        print(f"⚠️ Erreur lors de la génération de la réponse : {e}")
+        print(f"❌ Erreur pendant la génération : {e}")
