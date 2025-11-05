@@ -8,7 +8,7 @@ def ingest():
 def infer():
     print("💡 Lancement de l’inférence...")
     # Appelle ton script RAG_infer.py
-    subprocess.run(["python", "RAG_infer.py"], check=True)
+    subprocess.run(["python", "RAG_agent2.py"], check=True)
 
 def main():
     print("Hello from envrag!")
