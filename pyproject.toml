@@ -19,4 +19,5 @@ dependencies = [
     "arize-phoenix>=12.9.0",
     "openinference-instrumentation-langchain>=0.1.54",
     "arize-phoenix-otel>=0.13.1",
+    "langgraph-checkpoint-sqlite>=3.0.0",
 ]

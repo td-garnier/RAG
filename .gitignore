@@ -1,5 +1,9 @@
 /chroma_db
+/chroma_history
 .env
 RAGite1.ipynb
 /.venv
 uv.lock
+/.chainlit
+/__pycache__
+/.files
