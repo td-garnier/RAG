@@ -74,10 +74,10 @@ except Exception as e:
 print("------------------------------------------------------------------")
 
 # =====================================================
-# 1️⃣ Configuration de base et Modèle (Passée à cl.on_chat_start)
+# 1️⃣ Configuration de base et Modèle
 # =====================================================
 
-# Les fonctions utilitaires (save_to_long_term_memory) peuvent rester en dehors
+# fonctions utilitaires pour sauvegarder dans la LTM
 def save_to_long_term_memory(thread_id: str, user_query: str, ai_response: str, vectordb_history_instance):
     """Enregistre la paire de messages dans la base Chroma pour la LTM."""
     content = f"Utilisateur ({thread_id}): {user_query}\nIA ({thread_id}): {ai_response}"
@@ -109,31 +109,38 @@ def retrieve_context(query: str) -> str:
     rag_context = ""
     source_documents = [] # Liste pour stocker les documents bruts pour l'affichage
     source_names_list = [] # Liste pour forcer le LLM à citer les sources
+    
+    # 🆕 Dossier contenant les PDFs
+    PDF_FOLDER = "./documents" 
 
     for i, r in enumerate(results):
-        source_path = r.metadata.get('source', f'Source RAG {i+1}')
-        citation_name = f"source_{i+1}" # Nom Chainlit : source_1, source_2... (Nom simple pour la citation LLM)
+        # La source contient seulement 'NomDuFichier.pdf' (Ex: SV25-FR.pdf)
+        source_name_only = r.metadata.get('source', f'Source RAG {i+1}')
+        
+        citation_name = f"source_{i+1}"
         content = r.page_content
         
-        # 🆕 ADAPTATION : Créer le nom d'affichage convivial
-        try:
-            # Tente de rendre le nom plus lisible (ex: enlever le chemin et reformater la page)
-            base_name = os.path.basename(source_path)
-            if ':page_' in base_name:
-                # Ex: 'document.pdf:page_10' devient 'document.pdf - Page 10'
-                display_name_friendly = base_name.replace(':page_', ' - Page ')
-            else:
-                # Si le format est juste le nom du fichier, utilise le nom et l'index du chunk
-                display_name_friendly = f"{base_name} (Chunk {i+1})"
-        except:
-            display_name_friendly = f"Source {i+1} (Détails)"
+        # --- Extraction du Chemin et de la Page (ADAPTÉ POUR 'NomDuFichier.pdf') --- 
         
-        # 1. Stocke les documents bruts (pour l'affichage futur)
+        # 1. Création du chemin d'accès local complet (OBLIGATOIRE pour cl.Pdf)
+        # On ajoute le dossier d'ingestion au nom du fichier.
+        pdf_path = os.path.join(PDF_FOLDER, source_name_only)
+        
+        # 2. Tentative d'extraction du numéro de page
+        page_number_for_display = r.metadata.get('page_label',1)
+
+        # 3. Création du Nom Convivial
+        # On utilise directement le nom du fichier et la page par défaut.
+        display_name_friendly = f"{source_name_only} (Page {page_number_for_display})"
+        
+        # 1. Stocke les documents pour l'affichage futur
         source_documents.append({
             "content": content,
-            "source": source_path,
-            "name": citation_name, # Nom simple pour le lien cliquable
-            "display_name": display_name_friendly # 👈 AJOUT DE LA CLÉ DISPLAY_NAME
+            "source": source_name_only, 
+            "name": citation_name,
+            "display_name": display_name_friendly,
+            "path": pdf_path,                  # 👈 CHEMIN RECONSTRUIT : ./documents/SV25-FR.pdf
+            "page": page_number_for_display    # 👈 PAGE (toujours 1 ici)
         })
         
         # 2. Ajoute le nom de la source à la liste des citations
@@ -141,10 +148,10 @@ def retrieve_context(query: str) -> str:
         
         # 3. Construction du contexte RAG pour l'Agent
         rag_context += f"[DOCUMENT RAG {i+1} - CITATION: {citation_name}]: {content}\n---\n"
-    
-    # 4. ⚠️ STOCKAGE des DOCUMENTS bruts dans la session utilisateur
+
+    # 4. STOCKAGE des DOCUMENTS bruts dans la session utilisateur
     cl.user_session.set("documents_to_display", source_documents) 
-    
+
     # 5. Ajout d'une instruction forte pour forcer la citation des sources
     citation_instruction = f"\n\n**INSTRUCTION LLM:** Lorsque tu réponds à la question, utilise les sources ci-dessus et ajoute OBLIGATOIREMENT à la fin de ta réponse la liste des sources citées sous la forme : **Sources: {', '.join(source_names_list)}**."
 
@@ -179,7 +186,7 @@ async def start():
     # Modèle LLM
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash-lite", 
-        temperature=0.3,
+        temperature=0,
     )
 
     
@@ -247,6 +254,9 @@ async def main(message: cl.Message):
 
     try:
         # Lancement du stream de l'agent LangGraph
+        msg.content = ""
+        await msg.update()
+
         async for token, metadata in agent_instance.astream( # 👈 Agent stocké
             {"messages": initial_messages}, 
             config=checkpointer_config,
@@ -268,26 +278,38 @@ async def main(message: cl.Message):
         # 1. Récupère les documents bruts stockés par l'outil
         source_documents = cl.user_session.get("documents_to_display")
         text_elements = []
+        elements_to_attach = []
 
         if source_documents:
-            # Crée les cl.Text éléments (utilisant la nouvelle structure du doc)
             for doc in source_documents:
-
-                # Récupère le nom convivial s'il existe, sinon utilise l'ancien format
-                display_name_text = doc.get('display_name', f"{doc['name']} ({doc['source']})")
-
-                text_elements.append(
-                    cl.Text(
-                        content=doc['content'], 
-                        name=doc['name'], # 👈 Nom simple pour le lien (e.g., source_1)
-                        display="side",
-                        display_name=display_name_text # 👈 Nom du document/page
+                # Vérifie si le chemin d'accès au PDF est valide et existe
+                if os.path.exists(doc.get('path')):
+                    
+                    elements_to_attach.append(
+                        # 🆕 Utilisation de cl.Pdf
+                        cl.Pdf(
+                            name=doc['name'], 
+                            display="side", # Affichage dans le panneau latéral
+                            path=doc['path'], # Chemin local du fichier PDF
+                            page=doc.get('page', 1), # Page à laquelle ouvrir le PDF (par défaut 1)
+                            display_name=doc.get('display_name', doc['name']) # Nom convivial
+                        )
                     )
-                )
+                else:
+                    # Si le PDF n'est pas trouvé (erreur dans le chemin), 
+                    # on affiche au moins le chunk textuel comme secours
+                    elements_to_attach.append(
+                        cl.Text(
+                            content=doc['content'], 
+                            name=doc['name'],
+                            display="side",
+                            display_name=doc.get('display_name', doc['name'])
+                        )
+                    )
             
-            # 2. Attache les éléments au message final
-            msg.elements = text_elements
-            await msg.update() # 👈 Mise à jour finale pour afficher les sources
+            # 2. Attache les éléments (maintenant des cl.Pdf) au message final
+            msg.elements = elements_to_attach
+            await msg.update()
 
             # 3. Vider la liste après utilisation
             cl.user_session.set("documents_to_display", []) 
