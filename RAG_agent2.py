@@ -33,6 +33,7 @@ from langchain_community.document_loaders import PyPDFLoader
 
 # LangGraph (pour le Checkpoint/Mémoire uniquement)
 from langgraph.checkpoint.memory import InMemorySaver 
+from RAG_core import retrieve_context_core, vectordb_rag_global, vectordb_history_global
 
 # --- VARIABLES GLOBALES ---
 thread_id = "user_123_session"
@@ -102,60 +103,40 @@ def retrieve_context(query: str) -> str:
     Récupère les documents les plus pertinents de la base de données 
     documentaire (RAG) pour répondre à une question factuelle.
     """
-    results = vectordb_rag_global.similarity_search(query, k=3) 
-    if not results:
-        return "❌ Aucun document RAG pertinent trouvé."
+    # 🎯 1. Appel de la logique RAG CORE pour obtenir le contexte formaté
+    context_for_llm = retrieve_context_core(query) 
+
+    # 2. Logiciel d'affichage Chainlit : Récupérer les documents bruts pour cl.Pdf
     
-    rag_context = ""
-    source_documents = [] # Liste pour stocker les documents bruts pour l'affichage
-    source_names_list = [] # Liste pour forcer le LLM à citer les sources
-    
-    # 🆕 Dossier contenant les PDFs
+    # Utilisez la DB globale importée de RAG_core
+    retriever_rag = vectordb_rag_global.as_retriever(search_kwargs={"k": 4}) 
+    source_documents = retriever_rag.invoke(query) 
+
+    documents_for_display = []
     PDF_FOLDER = "./documents" 
 
-    for i, r in enumerate(results):
-        # La source contient seulement 'NomDuFichier.pdf' (Ex: SV25-FR.pdf)
-        source_name_only = r.metadata.get('source', f'Source RAG {i+1}')
-        
-        citation_name = f"source_{i+1}"
-        content = r.page_content
-        
-        # --- Extraction du Chemin et de la Page (ADAPTÉ POUR 'NomDuFichier.pdf') --- 
-        
-        # 1. Création du chemin d'accès local complet (OBLIGATOIRE pour cl.Pdf)
-        # On ajoute le dossier d'ingestion au nom du fichier.
+    for doc in source_documents:
+        # Créer les objets nécessaires pour cl.user_session.set()
+        source_name_only = doc.metadata.get('source', 'Inconnu')
         pdf_path = os.path.join(PDF_FOLDER, source_name_only)
-        
-        # 2. Tentative d'extraction du numéro de page
-        page_number_for_display = r.metadata.get('page_label',1)
-
-        # 3. Création du Nom Convivial
-        # On utilise directement le nom du fichier et la page par défaut.
+        page_number_for_display = doc.metadata.get('page_label', 1)
+        citation_name = f"source_{len(documents_for_display) + 1}"
         display_name_friendly = f"{source_name_only} (Page {page_number_for_display})"
         
-        # 1. Stocke les documents pour l'affichage futur
-        source_documents.append({
-            "content": content,
+        documents_for_display.append({
+            "content": doc.page_content,
             "source": source_name_only, 
             "name": citation_name,
             "display_name": display_name_friendly,
-            "path": pdf_path,                  # 👈 CHEMIN RECONSTRUIT : ./documents/SV25-FR.pdf
-            "page": page_number_for_display    # 👈 PAGE (toujours 1 ici)
+            "path": pdf_path,
+            "page": page_number_for_display
         })
-        
-        # 2. Ajoute le nom de la source à la liste des citations
-        source_names_list.append(citation_name)
-        
-        # 3. Construction du contexte RAG pour l'Agent
-        rag_context += f"[DOCUMENT RAG {i+1} - CITATION: {citation_name}]: {content}\n---\n"
 
-    # 4. STOCKAGE des DOCUMENTS bruts dans la session utilisateur
-    cl.user_session.set("documents_to_display", source_documents) 
+    # 3. Mise à jour de la session Chainlit
+    cl.user_session.set("documents_to_display", documents_for_display)
 
-    # 5. Ajout d'une instruction forte pour forcer la citation des sources
-    citation_instruction = f"\n\n**INSTRUCTION LLM:** Lorsque tu réponds à la question, utilise les sources ci-dessus et ajoute OBLIGATOIREMENT à la fin de ta réponse la liste des sources citées sous la forme : **Sources: {', '.join(source_names_list)}**."
+    return context_for_llm # Renvoyer le contexte formaté par la fonction CORE
 
-    return rag_context + citation_instruction
 @tool
 def retrieve_history(query: str) -> str:
     """
